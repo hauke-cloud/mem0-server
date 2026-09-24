@@ -82,9 +82,10 @@ published with the image on every release. See its `values.yaml` for the options
 ## Development
 
 ```sh
-python -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/pytest
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
+make venv       # .venv with runtime and dev dependencies
+make test
+make ci-lint    # ruff, chart lint/render, values.yaml tag guard -- exactly what CI runs
+make check      # format, then all of the above
 ```
 
 Against a local pgvector without a token:

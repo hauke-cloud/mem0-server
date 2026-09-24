@@ -1,3 +1,4 @@
+---
 name: CI/CD
 
 on:
@@ -9,56 +10,10 @@ on:
 
 env:
   PYTHON_VERSION: "3.13"
-  CHART_PATH: ./deployment/helm/mem0-server
 
 jobs:
-  helm-lint:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: azure/setup-helm@v4
-        with:
-          version: "latest"
-
-      # The shared action packages the chart but never lints or renders it,
-      # so a broken template would otherwise only surface at install time.
-      - name: Lint and render the chart
-        run: |
-          set -euo pipefail
-          required=(
-            --set oidc.issuer=https://id.example.com/realms/ci
-            --set 'oidc.audiences[0]=mem0'
-            --set mem0.llm.baseUrl=http://llm/v1
-            --set mem0.llm.model=llm
-            --set mem0.embedder.baseUrl=http://llm/v1
-            --set mem0.embedder.model=embed
-          )
-          helm lint "$CHART_PATH" "${required[@]}" --set postgres.connectionString=postgresql://ci
-          helm template ci "$CHART_PATH" "${required[@]}" --set postgres.connectionString=postgresql://ci > /dev/null
-          helm template ci "$CHART_PATH" "${required[@]}" \
-            --set existingSecret=ci \
-            --set postgres.clientCertSecret=ci \
-            --set persistence.enabled=false \
-            --set mem0.extraConfig.custom_instructions=ci \
-            --set httpRoute.enabled=true \
-            --set ingress.enabled=true \
-            --set envoyGateway.securityPolicy.enabled=true \
-            --set 'envoyGateway.securityPolicy.spec.jwt.providers[0].name=ci' \
-            --set envoyGateway.backendTrafficPolicy.enabled=true \
-            --set envoyGateway.backendTrafficPolicy.spec.timeout.http.requestTimeout=0s > /dev/null
-
-      # CI rewrites every "tag:" line in values.yaml to the release version.
-      - name: Guard values.yaml against the image tag rewrite
-        run: |
-          count="$(grep -c 'tag:' "$CHART_PATH/values.yaml")"
-          [ "$count" -eq 1 ] || { echo "values.yaml must contain exactly one 'tag:' line, found $count" >&2; exit 1; }
-
   build-and-release:
     runs-on: ubuntu-latest
-    needs: helm-lint
     permissions:
       contents: write
       packages: write
@@ -92,12 +47,20 @@ jobs:
           helm-chart-path: "./deployment/helm"
           helm-chart-name: "mem0-server"
 
-          # Testing / Linting
+          # Testing
           run-tests: "true"
-          test-command: "pytest"
+          test-command: "make test"
           enable-coverage: "false"
+
+          # Linting. The action splices `lint-command` verbatim into an
+          # `if [ -n "..." ]` test before running it, so anything with quotes
+          # or a `$(...)` in it breaks there. Hence a bare `make` target, which
+          # also keeps CI and a local `make ci-lint` running the same checks --
+          # including the chart lint/render, for which the action has no step
+          # of its own. helm comes preinstalled on ubuntu-latest; the action's
+          # own setup-helm step only runs later, for packaging.
           run-lint: "true"
-          lint-command: "ruff check . && ruff format --check ."
+          lint-command: "make ci-lint"
 
           # Build Arguments
           build-args: |
