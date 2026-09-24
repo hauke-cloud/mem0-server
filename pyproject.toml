@@ -1,0 +1,48 @@
+[project]
+name = "mem0-server"
+version = "0.1.0"
+description = "Per-user mem0 memory REST API that takes the user from a verified OIDC access token"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "hauke-cloud" }]
+# Keep in sync with requirements.txt, which pins these for the image and CI.
+dependencies = [
+    "mem0ai>=2.2,<3",
+    "fastapi>=0.115",
+    "uvicorn>=0.35",
+    "PyJWT[crypto]>=2.10",
+    # mem0's pgvector store; not among mem0ai's own dependencies.
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/hauke-cloud/mem0-server"
+Repository = "https://github.com/hauke-cloud/mem0-server"
+
+[project.scripts]
+mem0-server = "mem0_server.__main__:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# The shared CI action installs requirements files but not the package itself.
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "BLE", "S110"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends()/Query() in signatures are the idiom, not a bug.
+"src/mem0_server/app.py" = ["B008"]

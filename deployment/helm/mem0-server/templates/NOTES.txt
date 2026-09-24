@@ -1,0 +1,20 @@
+mem0-server has been deployed. Memories are filed under the "{{ .Values.oidc.userIdClaim }}" claim of
+access tokens from {{ .Values.oidc.issuer }}
+with audience {{ join " or " .Values.oidc.audiences }}.
+
+1. Inside the cluster:
+
+   http://{{ include "mem0-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+{{- if .Values.httpRoute.enabled }}
+
+2. Through the Gateway:
+{{- range .Values.httpRoute.hostnames }}
+   https://{{ . }}
+{{- end }}
+{{- end }}
+
+Check who a token resolves to:
+
+   curl -H "Authorization: Bearer $TOKEN" <url>/me
+
+OpenAPI description: <url>/docs

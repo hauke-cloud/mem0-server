@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mem0-server.fullname" . }}
+  labels:
+    {{- include "mem0-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  # A ReadWriteOnce history volume has to be released by the old pod first.
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mem0-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.mem0.extraConfig }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mem0-server.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mem0-server.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      enableServiceLinks: false
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          env:
+            - name: PORT
+              value: {{ .Values.containerPort | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: OIDC_ISSUER
+              value: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}
+            - name: OIDC_AUDIENCES
+              value: {{ required "oidc.audiences is required" .Values.oidc.audiences | join "," | quote }}
+            - name: OIDC_JWKS_URL
+              value: {{ .Values.oidc.jwksUrl | quote }}
+            - name: OIDC_USER_ID_CLAIM
+              value: {{ .Values.oidc.userIdClaim | quote }}
+            - name: OIDC_REQUIRED_ROLES
+              value: {{ .Values.oidc.requiredRoles | join "," | quote }}
+            - name: OIDC_ROLES_CLAIM
+              value: {{ .Values.oidc.rolesClaim | quote }}
+            - name: MEM0_LLM_BASE_URL
+              value: {{ required "mem0.llm.baseUrl is required" .Values.mem0.llm.baseUrl | quote }}
+            - name: MEM0_LLM_MODEL
+              value: {{ required "mem0.llm.model is required" .Values.mem0.llm.model | quote }}
+            - name: MEM0_LLM_TEMPERATURE
+              value: {{ .Values.mem0.llm.temperature | quote }}
+            - name: MEM0_LLM_MAX_TOKENS
+              value: {{ .Values.mem0.llm.maxTokens | quote }}
+            - name: MEM0_EMBEDDER_BASE_URL
+              value: {{ required "mem0.embedder.baseUrl is required" .Values.mem0.embedder.baseUrl | quote }}
+            - name: MEM0_EMBEDDER_MODEL
+              value: {{ required "mem0.embedder.model is required" .Values.mem0.embedder.model | quote }}
+            - name: MEM0_EMBEDDING_DIMS
+              value: {{ .Values.mem0.embedder.dims | quote }}
+            - name: MEM0_COLLECTION_NAME
+              value: {{ .Values.mem0.collectionName | quote }}
+            {{- with .Values.postgres.connectionString }}
+            - name: PG_CONNECTION_STRING
+              value: {{ . | quote }}
+            {{- else }}
+            {{- if not .Values.existingSecret }}
+            {{- fail "mem0-server: set postgres.connectionString, or existingSecret with a PG_CONNECTION_STRING key" }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.mem0.extraConfig }}
+            - name: MEM0_CONFIG_FILE
+              value: /etc/mem0/config.json
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /data
+            {{- if .Values.postgres.clientCertSecret }}
+            - name: db-cert
+              mountPath: /etc/ssl/db
+              readOnly: true
+            {{- end }}
+            {{- if .Values.mem0.extraConfig }}
+            - name: config
+              mountPath: /etc/mem0
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "mem0-server.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.postgres.clientCertSecret }}
+        - name: db-cert
+          secret:
+            secretName: {{ . }}
+            # 0440, root:fsGroup. libpq refuses a key readable by anyone but
+            # its owner, except a root-owned one at 0640 or tighter.
+            defaultMode: 288
+        {{- end }}
+        {{- if .Values.mem0.extraConfig }}
+        - name: config
+          configMap:
+            name: {{ include "mem0-server.fullname" . }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

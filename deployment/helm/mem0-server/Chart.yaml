@@ -1,0 +1,18 @@
+apiVersion: v2
+name: mem0-server
+description: Per-user mem0 memory REST API that takes the user from a verified OIDC access token
+type: application
+# version and appVersion are rewritten by CI from the git tag.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/hauke-cloud/mem0-server
+sources:
+  - https://github.com/hauke-cloud/mem0-server
+keywords:
+  - mem0
+  - memory
+  - llm
+  - oidc
+maintainers:
+  - name: hauke-cloud
+    url: https://github.com/hauke-cloud
