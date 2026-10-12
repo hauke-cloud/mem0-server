@@ -1,104 +1,145 @@
-# mem0-server
+<!-- llm-readme-management spec=1 commit=c267d1ae20178ce5bcd37f13f0484989eae34104 template=python model=qwen3.8-27b-q4 digest=08ee779219f6 generated=2026-10-12T08:48:50Z -->
+<a href="https://hauke.cloud" target="_blank"><img src="https://img.shields.io/badge/home-hauke.cloud-brightgreen" alt="hauke.cloud" style="display: block;" /></a>
+<a href="https://github.com/hauke-cloud" target="_blank"><img src="https://img.shields.io/badge/github-hauke.cloud-blue" alt="hauke.cloud Github Organisation" style="display: block;" /></a>
+<a href="https://github.com/hauke-cloud/llm-readme-management" target="_blank"><img src="https://img.shields.io/badge/template-python-orange" alt="Repository type - python" style="display: block;" /></a>
 
-A small REST API over [mem0](https://github.com/mem0ai/mem0) that is **user aware through OIDC**:
-every request carries an access token, the service verifies it against the issuer's JWKS,
-and the token's subject is the mem0 `user_id`. A caller can never read, search, change or
-delete another user's memories. This is what the stock mem0 server does not do: it
-authenticates callers but still takes `user_id` from the request, and resolves memory ids for
-anyone.
 
-It is meant as the backend for an opencode memory plugin (or any other agent) running
-against a self-hosted, OpenAI-compatible model server such as llama-swap.
+# Mem0 Server
 
-## How it works
 
-- **Identity**: `Authorization: Bearer <access token>` (`Token <...>`, which mem0's own
-  clients send, is accepted too). Signature, `iss`, `aud`, `exp` are checked in-process; an
-  optional role list gates access. The configured claim (`sub` by default) becomes `user_id`.
-- **Scoping**: requests have no `user_id` parameter. Lists, searches and bulk deletes are
-  filtered on the caller's `user_id`; anything addressed by id is loaded first and answers 404
-  unless it belongs to the caller, so ids cannot be probed. Caller-supplied `metadata` and
-  `filters` may not contain `user_id`, `agent_id`, `run_id` or mem0's bookkeeping keys.
-- **Storage**: memories and embeddings in Postgres with pgvector; each memory's change history
-  in mem0's SQLite file on a small volume (hence one replica).
-- **Models**: one OpenAI-compatible chat model for fact extraction/merging, one embeddings
-  model. Neither is contacted by the health probes.
+<img src="https://raw.githubusercontent.com/hauke-cloud/.github/main/resources/img/organisation-logo-small.png" alt="hauke.cloud logo" width="109" height="123" align="right">
 
-## API
 
-| Method | Path | Body / query | Notes |
-| --- | --- | --- | --- |
-| `GET` | `/me` | | `{user_id, username}` the token resolves to |
-| `POST` | `/memories` | `{messages, agent_id?, run_id?, metadata?, infer?}` | `messages` is a string or `[{role, content}]`; `infer: false` stores verbatim, without the LLM |
-| `GET` | `/memories` | `?agent_id&run_id&limit` | |
-| `POST` | `/search` | `{query, agent_id?, run_id?, filters?, top_k?, threshold?, rerank?}` | `filters` is mem0's metadata filter syntax, ANDed with the caller |
-| `GET` | `/memories/{id}` | | |
-| `PUT` | `/memories/{id}` | `{text, metadata?}` | |
-| `GET` | `/memories/{id}/history` | | |
-| `DELETE` | `/memories/{id}` | | |
-| `DELETE` | `/memories` | `?agent_id&run_id` | all of the caller's memories, or one agent's/run's |
-| `GET` | `/healthz`, `/readyz` | | no auth, no backend calls |
+<llm header hint="Name the distribution and say whether it is a library, a CLI or a service.">
 
-The OpenAPI document is at `/docs`.
+A Python FastAPI service that exposes the mem0 memory library as a REST API, deriving the caller's `user_id` from a verified OIDC access token so each client only ever touches its own memories. You deploy it as a container image or Helm chart in front of self-hosted OpenAI-compatible model servers.
 
-A per-project memory in an agent plugin is a `metadata` key, e.g.
-`{"metadata": {"project": "owner/repo"}}` on add and `{"filters": {"project": "owner/repo"}}`
-on search; `agent_id` separates tools (`opencode`, ...).
+</llm>
 
-```sh
-curl -s https://mem0.example.com/memories \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"messages":[{"role":"user","content":"I prefer tabs over spaces"}],"agent_id":"opencode","metadata":{"project":"hauke-cloud/infrastructure-flux"}}'
+
+## :book: Description
+
+<llm description>
+
+The stock mem0 server accepts `user_id` from the request body, so any client can read or write any user's memories. This repository wraps mem0 behind a FastAPI REST API that derives the caller's identity from a verified OIDC access token (JWKS, asymmetric algorithms only), scoping every operation to that user. A caller cannot list, search, or address another user's memories; foreign IDs return 404 and reserved metadata keys are rejected with 400.
+
+The service is deployed as a container image or Helm chart in front of a Postgres/pgvector database and an OpenAI-compatible LLM and embedder endpoint (for example behind llama-swap). Agent plugins such as the opencode memory plugin and other HTTP clients consume the API.
+
+- Add, list, search, read, update, and delete memories; per-memory change history
+- OIDC bearer-token authentication with optional role-based access control via a configurable claim path
+- Per-user isolation on every endpoint; bulk delete scoped by `agent_id`/`run_id`
+- Health and readiness probes that never touch Postgres, the LLM, or the embedder
+- Helm chart with optional Ingress, Gateway API HTTPRoute, and Envoy Gateway SecurityPolicy/BackendTrafficPolicy
+
+</llm>
+
+
+## :clipboard: Requirements
+
+<llm requirements hint="Give the Python version from requires-python or the CI matrix, and name the packaging tool actually in use (uv, poetry, pip).">
+
+- Python ≥ 3.11 (3.13 in CI and container images); dependencies installed with pip from `requirements.txt` / `requirements-dev.txt`.
+- A container engine (Docker or Podman) for `make image`.
+- Helm for chart linting and templating (`make helm-lint`).
+- PostgreSQL with the `pgvector` extension installed (`CREATE EXTENSION vector`); suggested dev image: `pgvector/pgvector:pg17`.
+- An OIDC identity provider reachable over HTTPS for JWKS token verification, or `AUTH_DISABLED=true` for local development.
+- One OpenAI-compatible chat-completions endpoint and one embeddings endpoint (e.g. behind llama-swap).
+- A Kubernetes cluster for deploying the Helm chart; Envoy Gateway (Gateway API) only if you enable the optional `httpRoute` or Envoy Gateway policies.
+- For CI releases: GitHub Actions write permissions on `contents`, `packages`, and `id-token` to push the image and chart to GHCR.
+
+</llm>
+
+
+## 🚀 Getting started
+
+<llm getting_started hint="Use the project's real installation path -- editable install, uv sync, poetry install -- not a generic pip install.">
+</llm>
+
+
+## :airplane: Usage
+
+<llm usage hint="Show the console-script entry points by name if the packaging metadata defines any.">
+</llm>
+
+
+## :wrench: Configuration
+
+<llm configuration>
+
+All service configuration is read from environment variables at startup (`Settings.from_env` in `src/mem0_server/config.py`). The table below covers the variables you will set in practice; the full list lives in that file.
+
+| Name | Default | Description |
+|------|---------|-------------|
+| `OIDC_ISSUER` | — (required) | OIDC issuer URL; used for JWKS discovery |
+| `OIDC_AUDIENCES` | — (required) | Comma-separated audience values the token must name |
+| `MEM0_LLM_BASE_URL` | — (required) | OpenAI-compatible chat endpoint |
+| `MEM0_LLM_MODEL` | — (required) | Chat model name |
+| `MEM0_EMBEDDER_BASE_URL` | — (required) | OpenAI-compatible embeddings endpoint |
+| `MEM0_EMBEDDER_MODEL` | — (required) | Embeddings model name |
+| `PG_CONNECTION_STRING` | — (required) | libpq URI or key=value string for Postgres |
+| `AUTH_DISABLED` | `false` | When `true`, all requests act as `DEV_USER_ID` (default `dev`); local development only |
+| `OIDC_USER_ID_CLAIM` | `sub` | JWT claim used as the caller's `user_id` |
+| `OIDC_ROLES_CLAIM` | `roles` | Dotted path to the roles claim (e.g. `realm_access.roles`) |
+| `OIDC_REQUIRED_ROLES` | *(none)* | Comma-separated roles; the token must carry at least one |
+| `MEM0_EMBEDDING_DIMS` | `1024` | Vector dimensionality; must match the embedder model |
+| `MEM0_COLLECTION_NAME` | `memories` | pgvector collection name |
+| `MEM0_HISTORY_DB_PATH` | `/data/history.db` | SQLite path for mem0 change history |
+| `HOST` / `PORT` | `0.0.0.0` / `8000` | Bind address and port |
+| `LOG_LEVEL` | `info` | Uvicorn log level |
+
+The Helm chart (`deployment/helm/mem0-server/values.yaml`) mirrors these as `oidc.*`, `mem0.*`, and `postgres.*` values and adds deployment-level options (persistence, ingress, Envoy Gateway policies, resource limits).
+
+</llm>
+
+
+## :hammer: Development
+
+<llm development hint="Cover the test runner, the linter and any pre-commit hooks the repository configures.">
+
+Set up a virtual environment and install dependencies:
+
+```bash
+make venv
 ```
 
-## Configuration
+Run the test suite (no network, no Postgres, no real mem0):
 
-| Variable | Default | |
-| --- | --- | --- |
-| `OIDC_ISSUER` | — | required |
-| `OIDC_AUDIENCES` | — | required, comma separated; a token must name one |
-| `OIDC_JWKS_URL` | discovery | |
-| `OIDC_USER_ID_CLAIM` | `sub` | |
-| `OIDC_REQUIRED_ROLES` | *(none)* | comma separated, any one suffices |
-| `OIDC_ROLES_CLAIM` | `roles` | dotted path, e.g. `realm_access.roles` |
-| `MEM0_LLM_BASE_URL`, `MEM0_LLM_MODEL` | — | required |
-| `MEM0_LLM_API_KEY`, `MEM0_LLM_TEMPERATURE`, `MEM0_LLM_MAX_TOKENS` | `unused`, `0.1`, `2000` | |
-| `MEM0_EMBEDDER_BASE_URL`, `MEM0_EMBEDDER_MODEL` | — | required |
-| `MEM0_EMBEDDER_API_KEY`, `MEM0_EMBEDDING_DIMS` | `unused`, `1024` | dims must match the model |
-| `PG_CONNECTION_STRING` | — | required, libpq URI or key=value |
-| `MEM0_COLLECTION_NAME` | `memories` | table name |
-| `MEM0_HISTORY_DB_PATH` | `/data/history.db` | |
-| `MEM0_CONFIG_FILE` | | JSON deep-merged over the generated mem0 config |
-| `AUTH_DISABLED`, `DEV_USER_ID` | `false`, `dev` | local development only |
-
-The database needs `CREATE EXTENSION vector` run once by a superuser; mem0 creates its tables
-itself.
-
-## Deployment
-
-The Helm chart is in [`deployment/helm/mem0-server`](deployment/helm/mem0-server) and is
-published with the image on every release. See its `values.yaml` for the options.
-
-## Development
-
-```sh
-make venv       # .venv with runtime and dev dependencies
+```bash
 make test
-make ci-lint    # ruff, chart lint/render, values.yaml tag guard -- exactly what CI runs
-make check      # format, then all of the above
 ```
 
-Against a local pgvector without a token:
+Format and lint with Ruff (target `py311`, line length 120):
 
-```sh
-podman run -d --rm -p 5432:5432 -e POSTGRES_PASSWORD=pw -e POSTGRES_USER=mem0 pgvector/pgvector:pg17
-AUTH_DISABLED=true MEM0_DIR=/tmp/mem0 MEM0_HISTORY_DB_PATH=/tmp/mem0/history.db \
-  PG_CONNECTION_STRING=postgresql://mem0:pw@127.0.0.1/mem0 \
-  MEM0_LLM_BASE_URL=http://127.0.0.1:8080/v1 MEM0_LLM_MODEL=... \
-  MEM0_EMBEDDER_BASE_URL=http://127.0.0.1:8080/v1 MEM0_EMBEDDER_MODEL=... \
-  PYTHONPATH=src .venv/bin/python -m mem0_server
+```bash
+make fmt
 ```
 
-## License
+CI runs `make ci-lint`, which chains `fmt-check`, `lint`, `helm-lint`, and `tag-guard`. The full local equivalent is:
 
-MIT
+```bash
+make check
+```
+
+This formats first, then runs every check CI performs. `helm-lint` requires the `helm` binary and renders the chart with all optional features enabled. `tag-guard` fails if `deployment/helm/mem0-server/values.yaml` does not contain exactly one `tag:` line, because CI rewrites that line from the git tag on release.
+
+Pull request titles are validated by a semantic-commit check. Allowed types are `fix`, `feat`, `docs`, `ci`, `chore`; the subject must start with an uppercase letter.
+
+</llm>
+
+
+## 📄 License
+
+This Project is licensed under the GNU General Public License v3.0
+
+- see the [LICENSE](LICENSE) file for details.
+
+
+## :coffee: Contributing
+
+To become a contributor, please check out the [CONTRIBUTING](CONTRIBUTING.md) file.
+
+
+## :email: Contact
+
+For any inquiries or support requests, please open an issue in this
+repository or contact us at [contact@hauke.cloud](mailto:contact@hauke.cloud).
